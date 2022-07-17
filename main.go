@@ -12,6 +12,7 @@ import (
 	"bytes"
 	"encoding/gob"
 
+	"github.com/atotto/clipboard"
 	"github.com/seehuhn/password"
 	"golang.org/x/crypto/nacl/secretbox"
 )
@@ -34,7 +35,14 @@ func main() {
 		}
 		os.Exit(0)
 	}
-	fmt.Println("usage: crypt [en|de] [filename]")
+	if command == "cp" {
+		if err := declip(filename); err != nil {
+			fmt.Println("Error:", err.Error())
+			os.Exit(1)
+		}
+		os.Exit(0)
+	}
+	fmt.Println("usage: crypt [en|de|cp] [filename]")
 }
 
 func encrypt(filename string) error {
@@ -82,44 +90,67 @@ func encrypt(filename string) error {
 	return nil
 }
 
-func decrypt(filename string) error {
+func decryptToBytes(filename string) ([]byte, error) {
 	if !strings.HasSuffix(filename, ".crypt") {
-		return fmt.Errorf("file musy have crypt extension.")
-	}
-	plainFilename := filename[:len(filename)-6]
-
-	if _, err := os.Stat(plainFilename); !os.IsNotExist(err) {
-		return fmt.Errorf("decrypted file %s already exists", plainFilename)
+		return nil, fmt.Errorf("file musy have crypt extension.")
 	}
 
 	encryptedFileBytes, err := ioutil.ReadFile(filename)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if len(encryptedFileBytes) == 0 {
-		return fmt.Errorf("encrypted file is zero length.")
+		return nil, fmt.Errorf("encrypted file is zero length.")
 	}
 
 	var ef EncryptedFile
 	buf := bytes.NewBuffer(encryptedFileBytes)
 	if err := gob.NewDecoder(buf).Decode(&ef); err != nil {
-		return err
+		return nil, err
 	}
 	if len(ef.Data) == 0 {
-		return fmt.Errorf("encrypted file has no contents.")
+		return nil, fmt.Errorf("encrypted file has no contents.")
 	}
 
 	fmt.Println("Encryption password...")
 	pwd, err := password.Read("")
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	key := sha(pwd)
 	var opened []byte
 	opened, ok := secretbox.Open(opened, ef.Data, &ef.Nonce, &key)
 	if !ok {
-		return fmt.Errorf("decryption failed.")
+		return nil, fmt.Errorf("decryption failed.")
+	}
+	return opened, nil
+}
+
+func declip(filename string) error {
+
+	opened, err := decryptToBytes(filename)
+	if err != nil {
+		return err
+	}
+
+	if err := clipboard.WriteAll(string(opened)); err != nil {
+		return err
+	}
+	return nil
+}
+
+func decrypt(filename string) error {
+
+	plainFilename := strings.TrimSuffix(filename, ".crypt")
+
+	if _, err := os.Stat(plainFilename); !os.IsNotExist(err) {
+		return fmt.Errorf("decrypted file %s already exists", plainFilename)
+	}
+
+	opened, err := decryptToBytes(filename)
+	if err != nil {
+		return err
 	}
 
 	if err := ioutil.WriteFile(plainFilename, opened, 0644); err != nil {
